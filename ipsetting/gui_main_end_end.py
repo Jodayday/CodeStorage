@@ -28,12 +28,13 @@ def get_config_path():
 
     return os.path.join(base_path, "config.json")
 
-def run_command(command):
+def run_command(command,shell=False):
     """subprocess.run()을 최적화하여 실행 속도 개선"""
     try:
         subprocess_run(command, check=True)
     except Exception as e:
-        messagebox.showerror("오류", f"명령 실행 중 오류 발생: {e}")
+        pass
+        # messagebox.showerror("오류", f"명령 실행 중 오류 발생: {e}")
 
 def load_config():
     """JSON 파일에서 학교별 IP, DNS, 마지막 선택한 학교 불러오기"""
@@ -73,47 +74,62 @@ def get_connected_ethernet():
     return next((iface for iface, stat in net_if_stats().items() if stat.isup and ("Ethernet" in iface or "이더넷" in iface)), None)
 
 def set_dhcp_for_all_ethernet():
-    """모든 이더넷 인터페이스를 DHCP로 변경"""
+    """'이더넷'이 포함된 모든 인터페이스를 DHCP로 변경"""
+    # net_if_stats()로 반환된 인터페이스 중 이름에 '이더넷'이 포함된 것만 처리
     for interface in net_if_stats():
+        if "이더넷" not in interface:
+            continue
         try:
             run_command(["netsh", "interface", "ip", "set", "address", interface, "dhcp"], shell=False)
             run_command(["netsh", "interface", "ip", "set", "dns", interface, "dhcp"], shell=False)
         except Exception:
-            pass
+            print(f"DHCP 오류 발생: {interface}")
+            # 오류 발생 시에도 다음 인터페이스로 진행
 
+def async_set_dhcp_for_all_ethernet():
+    """set_dhcp_for_all_ethernet 함수를 백그라운드 스레드에서 실행"""
+    threading.Thread(target=set_dhcp_for_all_ethernet, daemon=True).start()
 def set_static_ip(event=None):
-    """지정된 이더넷 인터페이스에 고정 IP 설정 (비동기 실행)"""
-    threading.Thread(target=set_dhcp_for_all_ethernet, daemon=True).start()  # DHCP 변경을 별도 스레드에서 실행
+    """모든 이더넷이 DHCP로 설정된 후 지정된 이더넷 인터페이스에 고정 IP 설정 (비동기 실행)"""
 
-    interface = get_connected_ethernet()
-    if not interface:
-        messagebox.showerror("오류", "연결된 이더넷 인터페이스가 없습니다.")
-        return
+    def configure_static_ip():
+        # 1. 모든 이더넷 인터페이스를 DHCP로 설정
+        set_dhcp_for_all_ethernet()
+        
+        # 2. DHCP 설정이 완료된 후, 연결된 이더넷 인터페이스 가져오기
+        interface = get_connected_ethernet()
+        if not interface:
+            messagebox.showerror("오류", "연결된 이더넷 인터페이스가 없습니다.")
+            return
 
-    if not current_school or current_school not in school_data:
-        messagebox.showerror("오류", "학교를 먼저 선택하세요.")
-        return
+        # 3. 학교 선택 및 입력 값 검증
+        if not current_school or current_school not in school_data:
+            messagebox.showerror("오류", "학교를 먼저 선택하세요.")
+            return
 
-    last_octet = ip_entry.get()
-    if not last_octet.isdigit() or not (0 <= int(last_octet) <= 255):
-        messagebox.showerror("오류", "올바른 마지막 옥텟(0~255)을 입력하세요.")
-        return
+        last_octet = ip_entry.get()
+        if not last_octet.isdigit() or not (0 <= int(last_octet) <= 255):
+            messagebox.showerror("오류", "올바른 마지막 옥텟(0~255)을 입력하세요.")
+            return
 
-    base_ip = school_data[current_school]
-    ip = base_ip + last_octet
-    subnet = "255.255.255.0"
-    gateway = base_ip + "1"
+        base_ip = school_data[current_school]
+        ip = base_ip + last_octet
+        subnet = "255.255.255.0"
+        gateway = base_ip + "1"
 
-    def apply_static_ip():
+        # 4. 정적 IP 및 DNS 설정 적용
         try:
-            run_command(["netsh", "interface", "ip", "set", "address", interface, "static", ip, subnet, gateway])
-            run_command(["netsh", "interface", "ip", "set", "dns", interface, "static", dns1])
-            run_command(["netsh", "interface", "ip", "add", "dns", interface, dns2, "index=2"])
+            run_command(["netsh", "interface", "ip", "set", "address", interface, "static", ip, subnet, gateway],shell=False)
+            run_command(["netsh", "interface", "ip", "set", "dns", interface, "static", dns1],shell=False)
+            run_command(["netsh", "interface", "ip", "add", "dns", interface, dns2, "index=2"],shell=False)
             messagebox.showinfo("완료", f"{interface}에 {ip} 고정 IP를 설정하였습니다.")
         except Exception as e:
-            messagebox.showerror("오류", f"IP 설정 중 오류 발생: {e}")
+            print(f"고정 오류 발생: {interface}")
+            
+            # messagebox.showerror("오류", f"IP 설정 중 오류 발생: {e}")
 
-    threading.Thread(target=apply_static_ip, daemon=True).start()  # IP 설정도 백그라운드에서 실행
+    # configure_static_ip() 함수 전체를 백그라운드 스레드에서 실행하여 GUI가 멈추지 않도록 함
+    threading.Thread(target=configure_static_ip, daemon=True).start()
 
 def change_school():
     """학교 변경 시 비밀번호 입력 후 변경"""
@@ -285,8 +301,17 @@ ip_entry = ttk.Entry(main_frame, width=5, validate="key", validatecommand=(valid
 ip_entry.pack()
 ip_entry.bind("<Return>", set_static_ip)
 
-# 고정 IP 버튼
-ttk.Button(main_frame, text="고정 IP 설정", command=set_static_ip).pack(pady=10)
+# 버튼들을 담을 프레임 생성 (메인 프레임 내)
+button_frame = ttk.Frame(main_frame)
+button_frame.pack(pady=10)
+
+# 고정 IP 설정 버튼 (왼쪽)
+static_ip_button = ttk.Button(button_frame, text="고정 IP 설정", command=set_static_ip)
+static_ip_button.pack(side="left", padx=5)
+
+# 자동 IP 설정 버튼 (오른쪽)
+auto_ip_button = ttk.Button(button_frame, text="자동IP설정", command=set_dhcp_for_all_ethernet)
+auto_ip_button.pack(side="left", padx=5)
 
 # 마지막 선택한 학교 정보 반영
 update_school_info()
