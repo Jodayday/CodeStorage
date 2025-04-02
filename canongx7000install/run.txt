@@ -1,0 +1,20 @@
+pyinstaller --onefile ^
+  --add-data "Driver;Driver" ^
+  --add-data "DrvSetup;DrvSetup" ^
+  --add-data "IJPAT;IJPAT" ^
+  --add-data "LANUTIL;LANUTIL" ^
+  --add-data "SCNUTIL;SCNUTIL" ^
+  install_end.py
+
+
+pyinstaller --onefile ^
+  --add-data "printers.json;." ^
+  --add-data "Driver;Driver" ^
+  --add-data "DrvSetup;DrvSetup" ^
+  --add-data "IJPAT;IJPAT" ^
+  --add-data "LANUTIL;LANUTIL" ^
+  --add-data "SCNUTIL;SCNUTIL" ^
+  install_end.py
+
+
+pyinstaller --onefile --uac-admin install_end.py
